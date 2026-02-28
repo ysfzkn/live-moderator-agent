@@ -10,3 +10,4 @@ client/dist/
 .pytest_cache/
 .idea/
 .idea
+uv.lock
