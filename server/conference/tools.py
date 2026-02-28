@@ -1,4 +1,8 @@
-"""OpenAI Realtime API function calling tool definitions and handlers."""
+"""Gemini Live API function calling tool definitions and handlers.
+
+Uses Gemini's functionDeclarations format with uppercase type names
+(OBJECT, STRING, NUMBER, etc.).
+"""
 
 from __future__ import annotations
 
@@ -11,71 +15,75 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Tool definitions sent to OpenAI via session.update
+# Tool definitions sent to Gemini via session setup.
+# Gemini format: list of objects with "functionDeclarations" key.
 CONFERENCE_TOOLS: list[dict[str, Any]] = [
     {
-        "type": "function",
-        "name": "advance_to_next_session",
-        "description": "Bir sonraki oturuma gecis yapar. Mevcut konusmaci tamamlandiginda, sure doldiginda veya mola bittiginde cagrilir.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "type": "string",
-                    "enum": [
-                        "speaker_finished",
-                        "time_expired",
-                        "break_over",
-                        "operator_skip",
-                    ],
-                    "description": "Gecis nedeni",
-                }
+        "functionDeclarations": [
+            {
+                "name": "advance_to_next_session",
+                "description": "Bir sonraki oturuma gecis yapar. Mevcut konusmaci tamamlandiginda, sure doldigunda veya mola bittiginde cagrilir.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "reason": {
+                            "type": "STRING",
+                            "enum": [
+                                "speaker_finished",
+                                "time_expired",
+                                "break_over",
+                                "operator_skip",
+                            ],
+                            "description": "Gecis nedeni",
+                        }
+                    },
+                    "required": ["reason"],
+                },
             },
-            "required": ["reason"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "check_time_remaining",
-        "description": "Mevcut oturum icin kalan sureyi kontrol eder.",
-        "parameters": {"type": "object", "properties": {}},
-    },
-    {
-        "type": "function",
-        "name": "get_session_info",
-        "description": "Mevcut veya sonraki oturum ve konusmaci bilgilerini getirir.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "which": {
-                    "type": "string",
-                    "enum": ["current", "next"],
-                    "description": "Hangi oturum bilgisi isteniyor",
-                }
+            {
+                "name": "check_time_remaining",
+                "description": "Mevcut oturum icin kalan sureyi kontrol eder.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {},
+                },
             },
-            "required": ["which"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "announce_time_warning",
-        "description": "Konusmaciya sure uyarisi verir. Kalan sure az oldugunda cagrilir.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "minutes_remaining": {
-                    "type": "number",
-                    "description": "Kalan dakika sayisi",
-                }
+            {
+                "name": "get_session_info",
+                "description": "Mevcut veya sonraki oturum ve konusmaci bilgilerini getirir.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "which": {
+                            "type": "STRING",
+                            "enum": ["current", "next"],
+                            "description": "Hangi oturum bilgisi isteniyor",
+                        }
+                    },
+                    "required": ["which"],
+                },
             },
-            "required": ["minutes_remaining"],
-        },
-    },
+            {
+                "name": "announce_time_warning",
+                "description": "Konusmaciya sure uyarisi verir. Kalan sure az oldugunda cagrilir.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "minutes_remaining": {
+                            "type": "NUMBER",
+                            "description": "Kalan dakika sayisi",
+                        }
+                    },
+                    "required": ["minutes_remaining"],
+                },
+            },
+        ]
+    }
 ]
 
 
 class ToolHandler:
-    """Handles function calls from the OpenAI Realtime API."""
+    """Handles function calls from the Gemini Live API."""
 
     def __init__(
         self,

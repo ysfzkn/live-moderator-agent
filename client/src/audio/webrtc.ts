@@ -1,60 +1,44 @@
 /**
- * WebRTC connection to Azure OpenAI Realtime API.
+ * Audio stream manager for Gemini Live API via WebSocket.
  *
  * Handles:
- * - Microphone capture via getUserMedia
- * - SDP offer/answer exchange with Azure OpenAI using ephemeral token
- * - Audio playback of AI responses
- * - Data channel for realtime events
+ * - Microphone capture via getUserMedia at 16kHz mono
+ * - ScriptProcessorNode to convert Float32 -> Int16 PCM
+ * - Sends binary PCM frames via the server WebSocket
+ * - Receives base64-encoded PCM audio from server and plays via AudioBufferSourceNode at 24kHz
+ * - Audio playback queue for smooth output
  */
 
-export interface WebRTCConfig {
-  token: string;
-  endpointUrl: string;
-  voice: string;
-  onCallId?: (callId: string) => void;
-  onConnectionChange?: (state: RTCPeerConnectionState) => void;
-  onDataChannelMessage?: (event: MessageEvent) => void;
+export interface AudioStreamConfig {
+  serverWs: WebSocket;
 }
 
-export class RealtimeWebRTC {
-  private pc: RTCPeerConnection | null = null;
-  private dataChannel: RTCDataChannel | null = null;
+export class AudioStreamManager {
+  private audioContext: AudioContext | null = null;
+  private playbackContext: AudioContext | null = null;
   private localStream: MediaStream | null = null;
-  private audioElement: HTMLAudioElement | null = null;
-  private config: WebRTCConfig | null = null;
+  private scriptProcessor: ScriptProcessorNode | null = null;
+  private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private serverWs: WebSocket | null = null;
+  private _isMuted = false;
 
-  get connectionState(): string {
-    return this.pc?.connectionState || "disconnected";
+  // Playback queue
+  private playbackQueue: AudioBuffer[] = [];
+  private isPlaying = false;
+  private nextPlayTime = 0;
+
+  get isMuted(): boolean {
+    return this._isMuted;
   }
 
-  async connect(config: WebRTCConfig): Promise<void> {
-    this.config = config;
+  async connect(config: AudioStreamConfig): Promise<void> {
+    this.serverWs = config.serverWs;
 
-    // Create peer connection
-    this.pc = new RTCPeerConnection({
-      iceServers: [], // Azure OpenAI handles ICE
-    });
+    // Create audio context for capture at 16kHz
+    this.audioContext = new AudioContext({ sampleRate: 16000 });
 
-    // Handle incoming audio track (AI voice)
-    this.pc.ontrack = (event) => {
-      this.audioElement = document.createElement("audio");
-      this.audioElement.autoplay = true;
-      this.audioElement.srcObject = event.streams[0];
-    };
-
-    // Connection state changes
-    this.pc.onconnectionstatechange = () => {
-      const state = this.pc?.connectionState || "disconnected";
-      console.log("WebRTC connection state:", state);
-      config.onConnectionChange?.(state as RTCPeerConnectionState);
-    };
-
-    // Create data channel for realtime events
-    this.dataChannel = this.pc.createDataChannel("oai-events");
-    this.dataChannel.onmessage = (event) => {
-      config.onDataChannelMessage?.(event);
-    };
+    // Create playback context at 24kHz (Gemini output rate)
+    this.playbackContext = new AudioContext({ sampleRate: 24000 });
 
     // Get microphone
     try {
@@ -63,57 +47,101 @@ export class RealtimeWebRTC {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          sampleRate: 16000,
         },
       });
-
-      // Add microphone track to peer connection
-      for (const track of this.localStream.getTracks()) {
-        this.pc.addTrack(track, this.localStream);
-      }
     } catch (err) {
       console.error("Microphone access denied:", err);
       throw new Error("Mikrofon erisimi reddedildi. Lutfen mikrofon izni verin.");
     }
 
-    // Create SDP offer
-    const offer = await this.pc.createOffer();
-    await this.pc.setLocalDescription(offer);
+    // Create source from microphone
+    this.sourceNode = this.audioContext.createMediaStreamSource(this.localStream);
 
-    // Send offer to Azure OpenAI and get answer
-    const sdpResponse = await fetch(config.endpointUrl, {
-      method: "POST",
-      headers: {
-        "api-key": config.token,
-        "Content-Type": "application/sdp",
-      },
-      body: offer.sdp,
-    });
+    // ScriptProcessorNode for Float32 -> Int16 PCM conversion
+    // Buffer size 4096, 1 input channel, 1 output channel
+    this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
 
-    if (!sdpResponse.ok) {
-      const errorText = await sdpResponse.text();
-      throw new Error(`Azure OpenAI SDP exchange failed: ${sdpResponse.status} ${errorText}`);
-    }
+    this.scriptProcessor.onaudioprocess = (event: AudioProcessingEvent) => {
+      if (this._isMuted) return;
+      if (!this.serverWs || this.serverWs.readyState !== WebSocket.OPEN) return;
 
-    // Extract call_id from Location header (if available)
-    const location = sdpResponse.headers.get("Location");
-    if (location) {
-      // Location header format: /openai/realtime/calls/{call_id}
-      const callId = location.split("/").pop();
-      if (callId) {
-        config.onCallId?.(callId);
+      const inputData = event.inputBuffer.getChannelData(0);
+
+      // Convert Float32 [-1, 1] to Int16 [-32768, 32767]
+      const int16Data = new Int16Array(inputData.length);
+      for (let i = 0; i < inputData.length; i++) {
+        const s = Math.max(-1, Math.min(1, inputData[i]));
+        int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
+
+      // Send binary PCM frame via WebSocket
+      this.serverWs.send(int16Data.buffer);
+    };
+
+    // Connect: mic -> scriptProcessor -> destination (required for processing to work)
+    this.sourceNode.connect(this.scriptProcessor);
+    this.scriptProcessor.connect(this.audioContext.destination);
+
+    console.log("AudioStreamManager connected: mic capture at 16kHz, playback at 24kHz");
+  }
+
+  /**
+   * Decode base64-encoded PCM Int16 audio and play it via AudioBufferSourceNode.
+   * Gemini sends audio as base64 PCM at 24kHz.
+   */
+  playAudio(base64Data: string): void {
+    if (!this.playbackContext) return;
+
+    // Decode base64 to binary
+    const binaryString = atob(base64Data);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
     }
 
-    const answerSdp = await sdpResponse.text();
-    await this.pc.setRemoteDescription({
-      type: "answer",
-      sdp: answerSdp,
-    });
+    // Interpret as Int16 PCM
+    const int16Data = new Int16Array(bytes.buffer);
 
-    console.log("WebRTC connected to Azure OpenAI Realtime API");
+    // Convert Int16 -> Float32 for Web Audio API
+    const float32Data = new Float32Array(int16Data.length);
+    for (let i = 0; i < int16Data.length; i++) {
+      float32Data[i] = int16Data[i] / 32768.0;
+    }
+
+    // Create AudioBuffer at 24kHz mono
+    const audioBuffer = this.playbackContext.createBuffer(1, float32Data.length, 24000);
+    audioBuffer.getChannelData(0).set(float32Data);
+
+    // Add to queue and play
+    this.playbackQueue.push(audioBuffer);
+    this._processQueue();
+  }
+
+  private _processQueue(): void {
+    if (this.isPlaying || this.playbackQueue.length === 0 || !this.playbackContext) return;
+
+    this.isPlaying = true;
+    const buffer = this.playbackQueue.shift()!;
+
+    const source = this.playbackContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.playbackContext.destination);
+
+    // Schedule playback at the right time to avoid gaps
+    const now = this.playbackContext.currentTime;
+    const startTime = Math.max(now, this.nextPlayTime);
+    source.start(startTime);
+    this.nextPlayTime = startTime + buffer.duration;
+
+    source.onended = () => {
+      this.isPlaying = false;
+      this._processQueue();
+    };
   }
 
   muteMicrophone(): void {
+    this._isMuted = true;
     if (this.localStream) {
       for (const track of this.localStream.getAudioTracks()) {
         track.enabled = false;
@@ -122,6 +150,7 @@ export class RealtimeWebRTC {
   }
 
   unmuteMicrophone(): void {
+    this._isMuted = false;
     if (this.localStream) {
       for (const track of this.localStream.getAudioTracks()) {
         track.enabled = true;
@@ -129,22 +158,15 @@ export class RealtimeWebRTC {
     }
   }
 
-  get isMuted(): boolean {
-    if (!this.localStream) return true;
-    const tracks = this.localStream.getAudioTracks();
-    return tracks.length === 0 || !tracks[0].enabled;
-  }
-
-  setVolume(volume: number): void {
-    if (this.audioElement) {
-      this.audioElement.volume = Math.max(0, Math.min(1, volume));
-    }
-  }
-
   disconnect(): void {
-    if (this.dataChannel) {
-      this.dataChannel.close();
-      this.dataChannel = null;
+    if (this.scriptProcessor) {
+      this.scriptProcessor.disconnect();
+      this.scriptProcessor = null;
+    }
+
+    if (this.sourceNode) {
+      this.sourceNode.disconnect();
+      this.sourceNode = null;
     }
 
     if (this.localStream) {
@@ -154,17 +176,21 @@ export class RealtimeWebRTC {
       this.localStream = null;
     }
 
-    if (this.audioElement) {
-      this.audioElement.pause();
-      this.audioElement.srcObject = null;
-      this.audioElement = null;
+    if (this.audioContext) {
+      this.audioContext.close();
+      this.audioContext = null;
     }
 
-    if (this.pc) {
-      this.pc.close();
-      this.pc = null;
+    if (this.playbackContext) {
+      this.playbackContext.close();
+      this.playbackContext = null;
     }
 
-    console.log("WebRTC disconnected");
+    this.playbackQueue = [];
+    this.isPlaying = false;
+    this.nextPlayTime = 0;
+    this.serverWs = null;
+
+    console.log("AudioStreamManager disconnected");
   }
 }

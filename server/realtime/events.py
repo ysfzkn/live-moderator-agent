@@ -1,183 +1,190 @@
-"""Handles OpenAI Realtime server events and bridges them to the state machine."""
+"""Handles Gemini Live API events and bridges them to the state machine.
+
+Gemini event flow:
+- serverContent.modelTurn.parts[].inlineData -> audio chunks
+- serverContent.outputTranscription -> what AI said (text)
+- serverContent.inputTranscription -> what user said (text)
+- serverContent.turnComplete -> AI finished speaking
+- toolCall.functionCalls -> function calling
+"""
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Callable, Coroutine
 
 from server.conference.state_machine import ConferenceStateMachine
 from server.conference.tools import CONFERENCE_TOOLS, ToolHandler
-from server.models.state import ACTIVE_SPEAKING_STATES, ConferenceState
+from server.models.state import ACTIVE_SPEAKING_STATES, SILENT_STATES, ConferenceState
 from server.prompts.builder import build_prompt
-from server.realtime.sideband import SidebandConnection
+from server.realtime.sideband import GeminiLiveConnection
 
 logger = logging.getLogger(__name__)
 
-# Callback for sending messages to the browser
 BrowserCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
 
 class RealtimeEventHandler:
-    """Handles events from the OpenAI Realtime API and coordinates
-    between the state machine, sideband, and browser client.
+    """Handles events from Gemini Live API and coordinates
+    between the state machine, Gemini connection, and browser client.
     """
 
     def __init__(
         self,
-        sideband: SidebandConnection,
+        gemini: GeminiLiveConnection,
         state_machine: ConferenceStateMachine,
         tool_handler: ToolHandler,
         on_browser_message: BrowserCallback,
+        on_audio_out: Callable[[bytes], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
-        self._sideband = sideband
+        self._gemini = gemini
         self._sm = state_machine
         self._tools = tool_handler
         self._send_to_browser = on_browser_message
+        self._on_audio_out = on_audio_out
 
-        # Register event handlers on sideband
-        self._sideband.on_event("response.done", self._on_response_done)
-        self._sideband.on_event(
-            "response.function_call_arguments.done",
-            self._on_function_call,
-        )
-        self._sideband.on_event("session.created", self._on_session_created)
-        self._sideband.on_event("session.updated", self._on_session_updated)
-        self._sideband.on_event("error", self._on_error)
-        self._sideband.on_event(
-            "input_audio_buffer.speech_started", self._on_speech_started
-        )
-        self._sideband.on_event(
-            "input_audio_buffer.speech_stopped", self._on_speech_stopped
-        )
-        self._sideband.on_event(
-            "response.audio_transcript.done", self._on_transcript_done
-        )
+        # Register Gemini event handlers
+        self._gemini.on_event("audio", self._on_audio)
+        self._gemini.on_event("output_transcription", self._on_output_transcription)
+        self._gemini.on_event("input_transcription", self._on_input_transcription)
+        self._gemini.on_event("turn_complete", self._on_turn_complete)
+        self._gemini.on_event("interrupted", self._on_interrupted)
+        self._gemini.on_event("toolCall", self._on_tool_call)
+        self._gemini.on_event("setupComplete", self._on_setup_complete)
 
         # Register state change callback
         self._sm.on_state_change(self._on_state_change)
 
-    async def _on_session_created(self, event: dict) -> None:
-        logger.info("Realtime session created: %s", event.get("session", {}).get("id"))
+    async def _on_setup_complete(self, event: dict) -> None:
+        logger.info("Gemini Live session setup complete")
 
-    async def _on_session_updated(self, event: dict) -> None:
-        logger.debug("Session updated")
+    async def _on_audio(self, event: dict) -> None:
+        """Audio chunk from Gemini (AI voice output).
 
-    async def _on_response_done(self, event: dict) -> None:
-        """Called when the AI finishes a response (speaking)."""
-        logger.info("Response done in state=%s", self._sm.current_state)
+        Forward base64 audio to browser for playback.
+        """
+        if self._on_audio_out:
+            import base64
+            audio_b64 = event.get("data", "")
+            audio_bytes = base64.b64decode(audio_b64)
+            await self._on_audio_out(audio_bytes)
 
-        # Notify browser that moderator stopped speaking
-        await self._send_to_browser(
-            {"type": "MODERATOR_STATUS", "payload": {"status": "idle"}}
-        )
+        # Also send as JSON via browser callback
+        await self._send_to_browser({
+            "type": "AUDIO_DATA",
+            "payload": {
+                "data": event.get("data", ""),
+                "mimeType": event.get("mimeType", "audio/pcm;rate=24000"),
+            },
+        })
 
-        # Let the state machine handle the transition
+    async def _on_output_transcription(self, event: dict) -> None:
+        """Transcript of what the AI said."""
+        text = event.get("text", "")
+        if text:
+            await self._send_to_browser({
+                "type": "TRANSCRIPT",
+                "payload": {"text": text},
+            })
+
+    async def _on_input_transcription(self, event: dict) -> None:
+        """Transcript of what the user/audience said."""
+        text = event.get("text", "")
+        if text:
+            logger.info("Input transcription: %s", text[:120])
+            # Also send input transcription to browser for visibility
+            await self._send_to_browser({
+                "type": "TRANSCRIPT",
+                "payload": {"text": f"[Salon] {text}"},
+            })
+
+    async def _on_turn_complete(self, event: dict) -> None:
+        """AI finished its turn (done speaking)."""
+        state = self._sm.current_state
+        logger.info("Turn complete in state=%s", state)
+
+        await self._send_to_browser({
+            "type": "MODERATOR_STATUS",
+            "payload": {"status": "idle"},
+        })
+
+        # IMPORTANT: In silent states, do NOT auto-advance the state machine.
+        # The agent might respond to a direct question in SPEAKER_ACTIVE,
+        # but that doesn't mean the speaker is done.
+        if state in SILENT_STATES:
+            logger.debug("Turn complete in silent state %s - not advancing", state.value)
+            return
+
+        # For active speaking states, let state machine handle transition
         await self._sm.handle_response_done()
 
-    async def _on_function_call(self, event: dict) -> None:
-        """Called when the AI wants to call a function."""
-        name = event.get("name", "")
-        call_id = event.get("call_id", "")
-        args_str = event.get("arguments", "{}")
+    async def _on_interrupted(self, event: dict) -> None:
+        """AI was interrupted (user started speaking)."""
+        logger.debug("AI interrupted by user speech")
+        await self._send_to_browser({
+            "type": "MODERATOR_STATUS",
+            "payload": {"status": "listening"},
+        })
 
-        try:
-            arguments = json.loads(args_str)
-        except json.JSONDecodeError:
-            arguments = {}
+    async def _on_tool_call(self, event: dict) -> None:
+        """Gemini wants to call function(s)."""
+        tool_call = event.get("toolCall", {})
+        function_calls = tool_call.get("functionCalls", [])
 
-        logger.info("Function call: %s(%s) call_id=%s", name, arguments, call_id)
+        for fc in function_calls:
+            name = fc.get("name", "")
+            call_id = fc.get("id", "")
+            args = fc.get("args", {})
 
-        # Execute the tool
-        result = await self._tools.handle_function_call(name, arguments)
+            logger.info("Gemini function call: %s(%s) id=%s", name, args, call_id)
 
-        # Send result back to OpenAI
-        await self._sideband.send_function_call_output(call_id, result)
+            # Execute the tool
+            result = await self._tools.handle_function_call(name, args)
 
-        # Trigger a new response so the model can continue
-        await self._sideband.create_response()
-
-    async def _on_speech_started(self, event: dict) -> None:
-        """User (microphone) started speaking."""
-        await self._send_to_browser(
-            {"type": "MODERATOR_STATUS", "payload": {"status": "listening"}}
-        )
-
-    async def _on_speech_stopped(self, event: dict) -> None:
-        """User (microphone) stopped speaking."""
-        pass  # Moderator will be "speaking" once response starts
-
-    async def _on_transcript_done(self, event: dict) -> None:
-        """Transcript of what the AI said is available."""
-        transcript = event.get("transcript", "")
-        if transcript:
-            await self._send_to_browser(
-                {"type": "TRANSCRIPT", "payload": {"text": transcript}}
-            )
-
-    async def _on_error(self, event: dict) -> None:
-        """Error from Realtime API."""
-        error = event.get("error", {})
-        logger.error("Realtime API error: %s", error)
-        await self._send_to_browser(
-            {"type": "ERROR", "payload": {"message": str(error)}}
-        )
+            # Send result back to Gemini
+            await self._gemini.send_tool_response(call_id, result)
 
     async def _on_state_change(
         self, state: ConferenceState, context: Any
     ) -> None:
-        """Called when the state machine transitions. Updates prompts and controls."""
+        """Called when the state machine transitions. Updates prompts."""
         logger.info("State changed to: %s", state.value)
 
         # Build new prompt for this state
         new_prompt = build_prompt(state, self._sm.context)
 
-        # Determine turn detection config based on state
-        if state in ACTIVE_SPEAKING_STATES:
-            turn_detection = {
-                "type": "semantic_vad",
-                "eagerness": "medium" if state == ConferenceState.INTERACTING else "low",
-                "create_response": True,
-                "interrupt_response": True,
-            }
-        else:
-            # Silent states - don't auto-respond
-            turn_detection = {
-                "type": "semantic_vad",
-                "eagerness": "low",
-                "create_response": False,
-                "interrupt_response": False,
-            }
-
-        # Update the session via sideband
-        await self._sideband.update_session(
-            instructions=new_prompt,
-            tools=CONFERENCE_TOOLS,
-            turn_detection=turn_detection,
-        )
+        # Send updated instructions to Gemini
+        await self._gemini.update_instructions(new_prompt)
 
         # Notify browser of state change
         session = self._sm.context.current_session
-        await self._send_to_browser(
-            {
-                "type": "STATE_UPDATE",
-                "payload": {
-                    "state": state.value,
-                    "session_index": self._sm.context.current_session_index,
-                    "session_title": session.title if session else None,
-                    "speaker_name": (
-                        session.speaker.name
-                        if session and session.speaker
-                        else None
-                    ),
-                    "is_paused": self._sm.context.is_paused,
-                },
-            }
-        )
+        await self._send_to_browser({
+            "type": "STATE_UPDATE",
+            "payload": {
+                "state": state.value,
+                "session_index": self._sm.context.current_session_index,
+                "session_title": session.title if session else None,
+                "speaker_name": (
+                    session.speaker.name
+                    if session and session.speaker
+                    else None
+                ),
+                "is_paused": self._sm.context.is_paused,
+            },
+        })
 
-        # If entering an active speaking state, trigger the AI to speak
-        if state in ACTIVE_SPEAKING_STATES:
-            await self._send_to_browser(
-                {"type": "MODERATOR_STATUS", "payload": {"status": "speaking"}}
+        # If entering an active speaking state, trigger AI to speak
+        # BUT NOT for silent states (SPEAKER_ACTIVE, BREAK_ACTIVE, etc.)
+        if state in ACTIVE_SPEAKING_STATES and state not in SILENT_STATES:
+            await self._send_to_browser({
+                "type": "MODERATOR_STATUS",
+                "payload": {"status": "speaking"},
+            })
+            await self._gemini.trigger_speech(
+                f"Sen simdi {state.value} durumundasin. Lutfen bu duruma uygun konusmani yap."
             )
-            await self._sideband.create_response()
+        elif state in SILENT_STATES:
+            await self._send_to_browser({
+                "type": "MODERATOR_STATUS",
+                "payload": {"status": "idle"},
+            })

@@ -1,10 +1,14 @@
 /**
  * WebSocket connection to the Python FastAPI server.
  * Handles message routing, reconnection, and state synchronization.
+ *
+ * Gemini flow: no TOKEN_READY or SIDEBAND_CONNECT needed.
+ * Audio flows as binary frames through the same WebSocket.
  */
 
 export type ServerMessageType =
-  | "TOKEN_READY"
+  | "AI_CONNECTED"
+  | "AUDIO_DATA"
   | "STATE_UPDATE"
   | "TIMER_TICK"
   | "MODERATOR_STATUS"
@@ -40,6 +44,13 @@ export class ServerConnection {
     return this._connected;
   }
 
+  /**
+   * Returns the raw WebSocket instance for binary audio streaming.
+   */
+  getWebSocket(): WebSocket | null {
+    return this.ws;
+  }
+
   connect(): void {
     if (this._connecting || this._connected) return;
     this._connecting = true;
@@ -55,12 +66,15 @@ export class ServerConnection {
       };
 
       this.ws.onmessage = (event) => {
-        try {
-          const msg: ServerMessage = JSON.parse(event.data);
-          this.emit(msg.type, msg);
-          this.emit("*", msg);
-        } catch {
-          console.error("Failed to parse server message");
+        // Only handle text (JSON) messages; binary frames are audio input from server
+        if (typeof event.data === "string") {
+          try {
+            const msg: ServerMessage = JSON.parse(event.data);
+            this.emit(msg.type, msg);
+            this.emit("*", msg);
+          } catch {
+            console.error("Failed to parse server message");
+          }
         }
       };
 
@@ -108,8 +122,8 @@ export class ServerConnection {
     this.send("LOAD_AGENDA", { agenda });
   }
 
-  requestToken(): void {
-    this.send("REQUEST_TOKEN");
+  connectAI(): void {
+    this.send("CONNECT_AI");
   }
 
   startConference(): void {
@@ -128,16 +142,16 @@ export class ServerConnection {
     this.send("NEXT_SESSION");
   }
 
+  speakerFinished(): void {
+    this.send("SPEAKER_FINISHED");
+  }
+
   toggleInteract(): void {
     this.send("TOGGLE_INTERACT");
   }
 
   overrideMessage(message: string): void {
     this.send("OVERRIDE_MESSAGE", { message });
-  }
-
-  sidebandConnect(callId: string): void {
-    this.send("SIDEBAND_CONNECT", { call_id: callId });
   }
 
   disconnect(): void {

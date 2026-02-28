@@ -11,13 +11,14 @@ from pydantic import BaseModel
 class ClientMessage(BaseModel):
     type: Literal[
         "LOAD_AGENDA",
+        "CONNECT_AI",
         "START_CONFERENCE",
         "PAUSE",
         "RESUME",
         "NEXT_SESSION",
+        "SPEAKER_FINISHED",
         "TOGGLE_INTERACT",
         "OVERRIDE_MESSAGE",
-        "REQUEST_TOKEN",
     ]
     payload: Optional[dict[str, Any]] = None
 
@@ -41,15 +42,15 @@ class TimerTickPayload(BaseModel):
     progress_ratio: float
 
 
-class TokenReadyPayload(BaseModel):
-    token: str
-    endpoint_url: str
-    voice: str
+class AudioDataPayload(BaseModel):
+    data: str  # base64-encoded PCM audio
+    mimeType: str = "audio/pcm;rate=24000"
 
 
 class ServerMessage(BaseModel):
     type: Literal[
-        "TOKEN_READY",
+        "AI_CONNECTED",
+        "AUDIO_DATA",
         "STATE_UPDATE",
         "TIMER_TICK",
         "MODERATOR_STATUS",

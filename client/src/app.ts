@@ -1,20 +1,26 @@
 /**
  * Main application orchestrator.
- * Connects ServerConnection, WebRTC, Store, and UI.
+ * Connects ServerConnection, AudioStreamManager, Store, and UI.
+ *
+ * Gemini flow:
+ *   1. Load agenda -> AGENDA_LOADED
+ *   2. Click Connect -> sends CONNECT_AI -> AI_CONNECTED
+ *   3. On AI_CONNECTED, get raw WS and start AudioStreamManager
+ *   4. AUDIO_DATA messages -> playAudio on AudioStreamManager
  */
 
 import { ServerConnection, type ServerMessage } from "./connection/server-ws";
-import { RealtimeWebRTC } from "./audio/webrtc";
+import { AudioStreamManager } from "./audio/webrtc";
 import { Store, type AppState, type SessionInfo } from "./state/store";
 
 export class App {
   private server: ServerConnection;
-  private webrtc: RealtimeWebRTC;
+  private audio: AudioStreamManager;
   private store: Store;
 
   constructor() {
     this.server = new ServerConnection();
-    this.webrtc = new RealtimeWebRTC();
+    this.audio = new AudioStreamManager();
     this.store = new Store();
   }
 
@@ -40,31 +46,25 @@ export class App {
       });
     });
 
-    this.server.on("TOKEN_READY", async (msg) => {
-      const { token, endpoint_url, voice } = msg.payload as {
-        token: string;
-        endpoint_url: string;
-        voice: string;
-      };
+    this.server.on("AI_CONNECTED", async () => {
       try {
-        await this.webrtc.connect({
-          token,
-          endpointUrl: endpoint_url,
-          voice,
-          onCallId: (callId: string) => {
-            // Connect sideband on the server
-            this.server.sidebandConnect(callId);
-          },
-          onConnectionChange: (state: RTCPeerConnectionState) => {
-            this.store.update({
-              webrtcConnected: state === "connected",
-            });
-          },
-        });
+        const ws = this.server.getWebSocket();
+        if (!ws) {
+          console.error("No WebSocket available for audio streaming");
+          return;
+        }
+        await this.audio.connect({ serverWs: ws });
         this.store.update({ webrtcConnected: true });
       } catch (err) {
-        console.error("WebRTC connection failed:", err);
+        console.error("Audio connection failed:", err);
         this.store.update({ webrtcConnected: false });
+      }
+    });
+
+    this.server.on("AUDIO_DATA", (msg) => {
+      const data = msg.payload.data as string;
+      if (data) {
+        this.audio.playAudio(data);
       }
     });
 
@@ -133,10 +133,10 @@ export class App {
       if (file) this.loadAgendaFile(file);
     });
 
-    // Connect button
+    // Connect button - sends CONNECT_AI
     document.getElementById("btn-connect")!.addEventListener("click", () => {
       if (this.store.getState().agendaLoaded) {
-        this.server.requestToken();
+        this.server.connectAI();
       }
     });
 
@@ -157,16 +157,20 @@ export class App {
       this.server.nextSession();
     });
 
+    document.getElementById("btn-speaker-done")!.addEventListener("click", () => {
+      this.server.speakerFinished();
+    });
+
     document.getElementById("btn-interact")!.addEventListener("click", () => {
       this.server.toggleInteract();
     });
 
     document.getElementById("btn-mute")!.addEventListener("click", () => {
-      if (this.webrtc.isMuted) {
-        this.webrtc.unmuteMicrophone();
+      if (this.audio.isMuted) {
+        this.audio.unmuteMicrophone();
         this.store.update({ isMuted: false });
       } else {
-        this.webrtc.muteMicrophone();
+        this.audio.muteMicrophone();
         this.store.update({ isMuted: true });
       }
     });
@@ -219,7 +223,7 @@ export class App {
       ? "Bagli"
       : "Baglanti yok";
 
-    // WebRTC status
+    // AI connection status (replaces WebRTC status)
     const webrtcStatus = document.getElementById("webrtc-status")!;
     if (state.agendaLoaded) {
       webrtcStatus.classList.remove("hidden");
@@ -347,16 +351,26 @@ export class App {
     const btnPause = document.getElementById("btn-pause") as HTMLButtonElement;
     const btnResume = document.getElementById("btn-resume") as HTMLButtonElement;
     const btnNext = document.getElementById("btn-next") as HTMLButtonElement;
+    const btnSpeakerDone = document.getElementById("btn-speaker-done") as HTMLButtonElement;
     const btnInteract = document.getElementById("btn-interact") as HTMLButtonElement;
 
     const isIdle = state.conferenceState === "idle";
     const isEnded = state.conferenceState === "ended";
     const isActive = !isIdle && !isEnded;
 
+    // Speaker states where "Konusmaci Bitirdi" button should be visible
+    const speakerStates = ["speaker_active", "interacting", "time_warning"];
+    const isSpeakerState = speakerStates.includes(state.conferenceState);
+
     btnStart.classList.toggle("hidden", isActive || isEnded);
     btnPause.classList.toggle("hidden", !isActive || state.isPaused);
     btnResume.classList.toggle("hidden", !state.isPaused);
     btnNext.disabled = !isActive;
+
+    // Show/hide and enable/disable speaker done button
+    btnSpeakerDone.classList.toggle("hidden", !isSpeakerState);
+    btnSpeakerDone.disabled = !isSpeakerState;
+
     btnInteract.disabled = !["speaker_active", "interacting"].includes(state.conferenceState);
     btnInteract.textContent =
       state.conferenceState === "interacting" ? "Dinleme Modu" : "Etkilesim";

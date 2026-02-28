@@ -11,3 +11,6 @@ client/dist/
 .idea/
 .idea
 uv.lock
+.claude/
+.claude/*
+settings.local.json
