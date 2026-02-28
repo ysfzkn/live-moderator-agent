@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:skywork.ai)",
+      "Bash(python -m pip install:*)",
+      "Bash(where:*)",
+      "Bash(python -m ensurepip:*)",
+      "Bash(python -m pip:*)",
+      "Bash(\"C:\\\\Users\\\\asus\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe\" --version)",
+      "Bash(\"C:\\\\Users\\\\asus\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe\" -m pip --version)",
+      "Bash(\"C:\\\\Users\\\\asus\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe\" -m pip install -e \".[dev]\")",
+      "Bash(\"C:\\\\Users\\\\asus\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe\" -m pytest tests/ -v)",
+      "Bash(npm install)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite build)",
+      "Bash(while read f)",
+      "Bash(do wc -l \"$f\")",
+      "Bash(done)"
+    ]
+  }
+}

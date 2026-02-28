@@ -1,0 +1,86 @@
+{
+  "id": "softtech-ai-summit-2026",
+  "title": "Softtech Yapay Zeka Zirvesi 2026",
+  "date": "2026-03-15",
+  "venue": "Istanbul Kongre Merkezi",
+  "language": "tr",
+  "moderator_voice": "coral",
+  "sessions": [
+    {
+      "id": "opening",
+      "type": "opening",
+      "title": "Acilis Konusmasi",
+      "duration_minutes": 3,
+      "notes": "Tum katilimcilari sicak bir sekilde karsilayin. Etkinligin amacini ve gunun programini kisaca ozetleyin."
+    },
+    {
+      "id": "keynote-1",
+      "type": "keynote",
+      "title": "Yapay Zekanin Gelecegi ve Turkiye",
+      "duration_minutes": 25,
+      "speaker": {
+        "name": "Dr. Ayse Yilmaz",
+        "title": "Yapay Zeka Bolum Baskani",
+        "organization": "Softtech",
+        "talk_title": "Yapay Zekanin Gelecegi ve Turkiye",
+        "bio": "15 yillik yapay zeka arastirma deneyimine sahip, uluslararasi alanda taninmis bir bilim insani."
+      }
+    },
+    {
+      "id": "talk-1",
+      "type": "talk",
+      "title": "Buyuk Dil Modelleri ile Uretkenlik",
+      "duration_minutes": 20,
+      "speaker": {
+        "name": "Mehmet Demir",
+        "title": "Kidemli Yazilim Muhendisi",
+        "organization": "Softtech",
+        "talk_title": "Buyuk Dil Modelleri ile Uretkenlik",
+        "bio": "LLM entegrasyonlari ve otomasyon konusunda uzman."
+      }
+    },
+    {
+      "id": "break-1",
+      "type": "break",
+      "title": "Kahve Molasi",
+      "duration_minutes": 10
+    },
+    {
+      "id": "panel-1",
+      "type": "panel",
+      "title": "Yapay Zeka ve Etik",
+      "duration_minutes": 30,
+      "panelists": [
+        {
+          "name": "Prof. Dr. Fatma Kaya",
+          "title": "Etik ve Teknoloji Profesoru",
+          "organization": "Bogazici Universitesi",
+          "talk_title": "YZ Etigi",
+          "bio": "Yapay zeka etigi alaninda oncü akademisyen."
+        },
+        {
+          "name": "Ali Ozturk",
+          "title": "CTO",
+          "organization": "TechVentures",
+          "talk_title": "YZ Etigi",
+          "bio": "Teknoloji girisimcisi ve sorumlu YZ savunucusu."
+        }
+      ],
+      "notes": "Panelistlere sirayla soz verin. Salon sorularina da yer acin."
+    },
+    {
+      "id": "qa-1",
+      "type": "qa",
+      "title": "Soru-Cevap",
+      "duration_minutes": 15,
+      "notes": "Salondan gelen sorulari duzenleyin ve panelistlere yonlendirin."
+    },
+    {
+      "id": "closing",
+      "type": "closing",
+      "title": "Kapanis",
+      "duration_minutes": 3,
+      "notes": "Tum konusmacilara ve katilimcilara tesekkur edin. Gelecek etkinliklerden bahsedin."
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>mAistro Moderator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/ui/styles/main.css" />
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <span class="logo">mAistro</span>
+      <span style="color: var(--text-muted); font-size: 13px;">Moderator Agent</span>
+    </div>
+    <div class="header-right">
+      <div id="moderator-badge" class="moderator-badge moderator-idle">HAZIR</div>
+      <div id="server-status" class="status-indicator status-disconnected">
+        <span class="status-dot"></span>
+        <span>Baglanti yok</span>
+      </div>
+      <div id="webrtc-status" class="status-indicator status-disconnected hidden">
+        <span class="status-dot"></span>
+        <span>WebRTC</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Setup Screen (shown before agenda is loaded) -->
+  <div id="setup-screen" class="setup-screen">
+    <div class="card setup-card">
+      <h1 class="setup-title">mAistro Moderator</h1>
+      <p class="setup-subtitle">Konferans ajandanizi yukleyerek baslayin</p>
+
+      <div id="file-drop" class="file-drop">
+        <p class="file-drop-text">Agenda JSON dosyasini surukleyin veya tiklayin</p>
+        <p class="file-drop-hint">JSON formati desteklenir</p>
+      </div>
+      <input type="file" id="file-input" accept=".json" class="hidden" />
+
+      <button id="btn-connect" class="btn btn-primary" style="width: 100%; margin-top: 12px;">
+        Baglan ve Basla
+      </button>
+    </div>
+  </div>
+
+  <!-- Dashboard (shown after agenda is loaded) -->
+  <div id="dashboard" class="main-layout hidden">
+    <!-- Left Column -->
+    <div style="display: flex; flex-direction: column; gap: 16px;">
+      <!-- Speaker Card -->
+      <div id="speaker-card" class="card speaker-card">
+        <div class="card-title">MEVCUT OTURUM</div>
+        <div id="speaker-avatar" class="speaker-avatar">?</div>
+        <div id="speaker-name" class="speaker-name">Konferans baslamadi</div>
+        <div id="speaker-title-org" class="speaker-title"></div>
+        <div id="speaker-org" class="speaker-org"></div>
+        <div id="talk-title" class="talk-title" style="display: none;"></div>
+      </div>
+
+      <!-- Timer -->
+      <div class="card timer-card">
+        <div class="card-title">KALAN SURE</div>
+        <div id="timer-display" class="timer-display timer-green">--:--</div>
+        <div id="timer-label" class="timer-label"></div>
+        <div class="progress-container">
+          <div class="progress-bar">
+            <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="card controls-card">
+        <button id="btn-start" class="btn btn-success">Basla</button>
+        <button id="btn-pause" class="btn btn-warning hidden">Duraklat</button>
+        <button id="btn-resume" class="btn btn-success hidden">Devam</button>
+        <button id="btn-next" class="btn btn-primary" disabled>Sonraki</button>
+        <button id="btn-interact" class="btn btn-ghost" disabled>Etkilesim</button>
+        <button id="btn-mute" class="btn btn-ghost">Mikrofon Kapat</button>
+
+        <input
+          id="override-input"
+          class="override-input"
+          type="text"
+          placeholder="Ozel mesaj gonderin..."
+        />
+        <button id="btn-override" class="btn btn-ghost">Gonder</button>
+      </div>
+
+      <!-- Transcript -->
+      <div class="card">
+        <div class="card-title">MODERATOR KONUSMASI</div>
+        <div id="transcript-panel" class="transcript-panel">
+          <div class="transcript-line" style="color: var(--text-muted);">Henuz konusma yok...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column (Sidebar) -->
+    <div class="sidebar">
+      <!-- Conference Progress -->
+      <div class="card">
+        <div class="card-title">KONFERANS ILERLEMESI</div>
+        <div class="conference-progress">
+          <span id="progress-text">0 / 0</span>
+          <div class="progress-bar" style="flex: 1;">
+            <div id="conference-progress-fill" class="progress-fill" style="width: 0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agenda List -->
+      <div class="card" style="flex: 1; overflow-y: auto;">
+        <div class="card-title">PROGRAM</div>
+        <ul id="agenda-list" class="agenda-list">
+          <li class="agenda-item">
+            <span style="color: var(--text-muted);">Agenda yuklenmedi</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Paused Overlay -->
+  <div id="paused-overlay" class="paused-overlay hidden">
+    <span class="paused-text">DURAKLATILDI</span>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
