@@ -44,6 +44,18 @@ export class App {
         agendaTitle: p.title as string,
         sessions: p.sessions as SessionInfo[],
       });
+
+      // Update setup screen to show agenda is loaded
+      const fileDrop = document.getElementById("file-drop")!;
+      fileDrop.innerHTML = `
+        <p class="file-drop-text" style="color: var(--color-success);">✓ Agenda yüklendi: ${p.title}</p>
+        <p class="file-drop-hint">${p.total_sessions} oturum, ${p.total_duration} dakika</p>
+      `;
+
+      // Enable connect button
+      const connectBtn = document.getElementById("btn-connect") as HTMLButtonElement;
+      connectBtn.disabled = false;
+      connectBtn.textContent = "Bağlan ve Başla";
     });
 
     this.server.on("AI_CONNECTED", async () => {
@@ -55,6 +67,10 @@ export class App {
         }
         await this.audio.connect({ serverWs: ws });
         this.store.update({ webrtcConnected: true });
+
+        // Auto-start conference after AI connects
+        console.log("AI connected, auto-starting conference...");
+        this.server.startConference();
       } catch (err) {
         console.error("Audio connection failed:", err);
         this.store.update({ webrtcConnected: false });
@@ -133,11 +149,25 @@ export class App {
       if (file) this.loadAgendaFile(file);
     });
 
-    // Connect button - sends CONNECT_AI
+    // Connect button - sends CONNECT_AI and switches to dashboard
     document.getElementById("btn-connect")!.addEventListener("click", () => {
-      if (this.store.getState().agendaLoaded) {
-        this.server.connectAI();
+      const state = this.store.getState();
+      if (!state.agendaLoaded) {
+        console.warn("Lütfen önce agenda yükleyin");
+        return;
       }
+      if (state.webrtcConnected) {
+        console.warn("AI zaten bağlı");
+        return;
+      }
+
+      // Switch to dashboard immediately
+      document.getElementById("setup-screen")!.classList.add("hidden");
+      document.getElementById("dashboard")!.classList.remove("hidden");
+
+      // Send CONNECT_AI - on AI_CONNECTED, conference will auto-start
+      console.log("Connecting to AI...");
+      this.server.connectAI();
     });
 
     // Controls
@@ -207,15 +237,6 @@ export class App {
   }
 
   private render(state: AppState): void {
-    // Setup/Dashboard visibility
-    const setup = document.getElementById("setup-screen")!;
-    const dashboard = document.getElementById("dashboard")!;
-
-    if (state.agendaLoaded) {
-      setup.classList.add("hidden");
-      dashboard.classList.remove("hidden");
-    }
-
     // Server status
     const serverStatus = document.getElementById("server-status")!;
     serverStatus.className = `status-indicator ${state.serverConnected ? "status-connected" : "status-disconnected"}`;
